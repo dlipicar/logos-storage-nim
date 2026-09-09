@@ -217,27 +217,6 @@ in stdenv.mkDerivation rec {
       CFLAGS="-Wall -Os -DENABLE_STRNATPMPERR -DNATPMP_MAX_RETRIES=4 -DNATPMP_STATICLIB" \
       libnatpmp.a
 
-    # libplum (new in v0.4.4) is configured by the Makefile with a bare
-    # `cmake -B build`, which under this stdenv picks the cross compiler up from
-    # $CC but leaves CMAKE_SYSTEM_NAME as the BUILD system. libplum's CMakeLists
-    # gates both `add_definitions(-DWIN32_LEAN_AND_MEAN)` and its
-    # `target_link_libraries(... ws2_32 iphlpapi)` on CMake's WIN32, so neither
-    # applies and its example executable fails to link with
-    #     libplum.a(upnp.c.o): undefined reference to `__imp_closesocket'
-    # (the archive itself is fine -- a static lib records no imports -- which is
-    # why only the example target dies).
-    #
-    # Configure it here with the system name it should have had, and with the
-    # example off: we consume libplum.a only, and building a sample executable
-    # for a platform the builder cannot run is pure cost on every platform.
-    # CMake persists both in build/CMakeCache.txt, so when `make deps` re-runs
-    # its own `cmake -B build` the cached values survive and the subsequent
-    # `make -C build` finds everything up to date.
-    cmake -B vendor/nim-libplum/vendor/libplum/build \
-      -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-      -DCMAKE_SYSTEM_NAME=Windows -DPLUM_NO_EXAMPLE=ON \
-      vendor/nim-libplum/vendor/libplum
-
     # nim-nat-traversal expects libminiupnpc.a at the miniupnpc ROOT on Windows
     # and under build/ everywhere else -- see the "the Makefiles of the miniupnp
     # library have an inconsistency" comment in nat_traversal/miniupnpc.nim.
