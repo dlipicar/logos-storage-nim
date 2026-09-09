@@ -149,25 +149,9 @@ in stdenv.mkDerivation rec {
   postPatch = lib.optionalString isWindows ''
     chmod -R +w .
 
-    # 2. buildLevelDb() shells out to cmake AT COMPILE TIME, and its Windows
-    #    branch asks for -G"MSYS Makefiles", a generator a Nix builder does not
-    #    have. Correcting the generator is not enough either: leveldb's own
-    #    CMakeLists then runs check_cxx_source_compiles/try_run probes, which
-    #    under cross would have to EXECUTE a PE on the Linux builder.
-    #
-    #    That whole step is vestigial for this build. The only artifact it
-    #    produces is port/port_config.h in the BUILD directory, and none of the
-    #    {.passc: "-I"...} lines below put that directory on the include path --
-    #    so port_stdcxx.h's __has_include("port/port_config.h") never finds it
-    #    and falls back to its defaults, on Linux and macOS just as much as
-    #    here. Seed the sentinel the function itself checks for, so it returns
-    #    before running anything.
-    #
-    #    Windows-only on purpose: the native builds keep running it, so their
-    #    output stays bit-identical to what upstream produces today.
+    # Skip the LevelDB setup
     mkdir -p vendor/nim-leveldbstatic/build
-    echo '# cross build: leveldb cmake step skipped -- see nix/default.nix' \
-      > vendor/nim-leveldbstatic/build/Makefile
+    touch vendor/nim-leveldbstatic/build/Makefile
   '';
 
   configurePhase = ''
