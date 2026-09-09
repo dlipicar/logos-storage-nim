@@ -149,51 +149,6 @@ in stdenv.mkDerivation rec {
   postPatch = lib.optionalString isWindows ''
     chmod -R +w .
 
-    # ---- The compile-time DirSep trap ------------------------------------
-    #
-    # Nim's os.parentDir normalises to the TARGET's DirSep, which is '\' the
-    # moment os=Windows -- and it rewrites the WHOLE path, not just the
-    # component being split. So a compile-time `currentSourcePath.parentDir`
-    # yields \build\storage-nim\... , which the Linux builder then treats as a
-    # single relative filename and cannot open. The failure surfaces as
-    # "cannot open file" naming a path that visibly exists.
-    #
-    # Note what does NOT need patching: the `currentSourcePath.rsplit({DirSep,
-    # AltSep}, 1)[0] & "/..."` idiom returns an unmodified substring and is
-    # already correct -- that is what nim-bearssl, nim-blscurve, nim-secp256k1,
-    # nim-zlib, nim-lsquic and boringssl's own srcPath use. nim-nat-traversal
-    # has learned the lesson explicitly and appends .replace('\\', '/').
-    # Only plain `parentDir` is unsafe. nim-leveldbstatic used it too and was
-    # fixed upstream, leaving nim-boringssl as the last one on this code path.
-    #
-    # All of this is invisible on MSYS2, where the filesystem accepts either
-    # separator -- which is why upstream CI has never seen any of it.
-
-    # nim-boringssl/boringssl.nim -- baseDir feeds linkAsmFiles, which
-    # assembles 25 .asm files with nasm on the Windows branch. Rewritten to
-    # the rsplit idiom the same file already uses for srcPath (line 21), so
-    # no new import is needed and the expression stays platform-neutral.
-    sed -i "s|const baseDir = currentSourcePath.parentDir|const baseDir = currentSourcePath.rsplit({DirSep, AltSep}, 1)[0]|" \
-      vendor/nim-boringssl/boringssl.nim
-    # Fixing baseDir is necessary but NOT sufficient: nim's `/` operator
-    # re-mangles the whole path at each use, so the two staticRead calls
-    # feeding nasm's prefix includes still resolve to
-    # \boringssl\gen\..._win_asm.inc. That file already wraps its OTHER
-    # joins in normalizePath(dirSep = '/'); rewrite only the ones that are
-    # not, to plain concatenation.
-    sed -i "/normalizePath/!s|baseDir /|baseDir \& \"/\" \&|" \
-      vendor/nim-boringssl/boringssl.nim
-
-    # Fail loudly if upstream moved any of these out from under the patch --
-    # a silently-unapplied sed would resurface hours later as an unrelated
-    # "cannot open file" deep in the compile.
-    for f in "vendor/nim-boringssl/boringssl.nim:currentSourcePath.parentDir" \
-             "vendor/nim-boringssl/boringssl.nim:[^(]baseDir /"; do
-      if grep -q "''${f#*:}" "''${f%%:*}"; then
-        echo "error: DirSep patch did not apply to ''${f%%:*}" >&2; exit 1
-      fi
-    done
-
     # 2. buildLevelDb() shells out to cmake AT COMPILE TIME, and its Windows
     #    branch asks for -G"MSYS Makefiles", a generator a Nix builder does not
     #    have. Correcting the generator is not enough either: leveldb's own
