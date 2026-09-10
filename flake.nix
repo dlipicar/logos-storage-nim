@@ -48,7 +48,7 @@
                     url = "https://nim-lang.org/download/nim-${version}.tar.xz";
                     hash = "sha256-eVe37QBCBrzxC8xPO0dEFTh45i8kMVUqmo6dP0Do1dU=";
                   };
-                  # Rewritten patch for 2.2.10.
+                  # Rewrite patch for 2.2.10.
                   patches = builtins.filter
                     (p: baseNameOf (toString p) != "extra-mangling-2.patch") old.patches;
                   # This flag turns on code that 2.2.10 no longer compiles.
