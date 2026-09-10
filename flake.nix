@@ -48,10 +48,7 @@
                     url = "https://nim-lang.org/download/nim-${version}.tar.xz";
                     hash = "sha256-eVe37QBCBrzxC8xPO0dEFTh45i8kMVUqmo6dP0Do1dU=";
                   };
-                  # ROT13s the module names nim generates, so nix cannot read
-                  # store paths in them and record runtime dependencies on the
-                  # build tools. Rewritten upstream for 2.2.10, and our output
-                  # is a Windows PE that leaves the store anyway.
+                  # Rewritten patch for 2.2.10.
                   patches = builtins.filter
                     (p: baseNameOf (toString p) != "extra-mangling-2.patch") old.patches;
                   # This flag turns on code that 2.2.10 no longer compiles.
