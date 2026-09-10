@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   windows:
-    uses: logos-co/logos-windows-ci/.github/workflows/windows-ci.yml@f60eef58524c2034d923a1b1d7749f91ce40236b
+    uses: logos-co/logos-windows-ci/.github/workflows/windows-ci.yml@b154b108f97f13b796fbf56b23911dbe89c33e2e
     secrets: inherit
     with:
       submodules: recursive
