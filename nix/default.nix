@@ -21,59 +21,32 @@ let
   inherit (pkgs) lib writeScriptBin callPackage;
 
   revision = lib.substring 0 8 (src.rev or "dirty");
-
-  # `pkgs.stdenv.isLinux` answers for the BUILD platform, which is Linux even
-  # when cross-compiling to Windows -- so every platform test here goes through
-  # hostPlatform, and every if/elif chain tests Windows FIRST. Under mingw
-  # cross isDarwin and isAarch64 are both false and x86_64 still matches, so a
-  # Windows target otherwise takes the Linux branch in silence.
   hostPlatform = pkgs.stdenv.hostPlatform;
   isWindows = hostPlatform.isWindows;
 
   tools = callPackage ./tools.nix {};
 
-  # Pin GCC/Clang versions -- but only where we own the toolchain. On a cross
-  # build pkgs.stdenv IS the mingw stdenv; replacing it with gcc13Stdenv would
-  # silently retarget the whole build at the build platform.
+  # Determine the compiler.
+  # pkgs.stdenv is the mingw compiler for windows.
   stdenv =
     if isWindows then pkgs.stdenv
     else if hostPlatform.isLinux then pkgs.gcc13Stdenv
     else pkgs.clang18Stdenv;
 
-  # Win32 imports that the Nim runtime, chronos and the vendored C libraries
-  # need, plus two that are specific to this closure:
-  #   -lstdc++      nim-leveldbstatic compiles LevelDB's C++ sources through
-  #                 nim's {.compile.} pragma, but nim drives the LINK through
-  #                 gcc, not g++, so nothing else pulls in the C++ runtime or
-  #                 __gxx_personality_seh0.
-  #   -lwinpthread  winpthreads' pthread_time.h inlines clock_gettime as a call
-  #                 to clock_gettime64, which lives in libwinpthread; having the
-  #                 headers on the include path is not enough.
-  # Passed as separate --passL: flags rather than one quoted string so nothing
-  # has to survive make's word splitting on the way to the nim command line.
-  windowsLinkFlags = [
-    "-lws2_32" "-lbcrypt" "-liphlpapi" "-luserenv" "-lntdll" "-ldbghelp"
-    "-lwinpthread" "-lstdc++"
+  # -lws2_32: Windows sockets, used by boringssl, libplum and miniupnpc.
+  # -lbcrypt: Windows CNG, the random source for boringssl, libplum and Nim.
+  # -liphlpapi: IP Helper API used by miniupnpc and libplum.
+  # -lstdc++: nim links LevelDB's C++ objects through gcc, not g++.
+  # -lwinpthread: pthread_time.h inlines clock_gettime into a clock_gettime64 call.
+  # --out-implib because nim emits only the .dll, and CMake's find_library
+  # ignores a bare .dll.
+  windowsNimFlags = [
+    "--passL:-lws2_32" "--passL:-lbcrypt" "--passL:-liphlpapi"
+    "--passL:-lwinpthread" "--passL:-lstdc++"
+    "--passL:-Wl,--out-implib,build/libstorage.dll.a"
   ];
 
-  # A Windows shared library is TWO artifacts: consumers LINK against the import
-  # library and SHIP the .dll. nim emits only the .dll, and CMake's find_library
-  # will not return a bare .dll -- so a consumer silently falls through to
-  # libstorage.a and tries to link the whole Nim runtime statically, which then
-  # fails on every leveldb/setjmp symbol. Emitting the import lib is what makes
-  # `-lstorage` mean the DLL.
-  windowsNimFlags =
-    map (f: "--passL:${f}") windowsLinkFlags
-    ++ [ "--passL:-Wl,--out-implib,build/libstorage.dll.a" ];
-
-  # Windows splits a shared library in two: the import half is a link-time
-  # artifact and belongs in lib/, but the .dll is a RUNTIME artifact and belongs
-  # in bin/ -- CMake's own RUNTIME destination, and what openssl and every
-  # autotools port in this closure already do. Following it is not cosmetic:
-  # nixpkgs' win-dll-link hook stages a PE's dependency DLLs automatically, but
-  # its fixup only ever walks $prefix/bin, so a .dll in lib/ ships with none of
-  # libgcc_s_seh-1 / libstdc++-6 / libwinpthread-1 beside it and fails to load
-  # on Windows with no diagnostic.
+  # nixpkgs' win-dll-link hook only walks $prefix/bin
   dllDir = if isWindows then "bin" else "lib";
 
   libExt =
@@ -93,17 +66,11 @@ in stdenv.mkDerivation rec {
     openssl
     gmp
   ] ++ lib.optionals isWindows [
-    # nixpkgs builds mingw-w64 against mcfgthread, so pthread.h and
-    # libpthread.a exist nowhere in the default closure; the vendored C carries
-    # POSIX-threads assumptions regardless.
+    # nixpkgs' mingw uses mcfgthread, so pthread.h needs adding back.
     windows.pthreads
   ];
 
-  # Dependencies that should only exist in the build environment. Every one of
-  # these RUNS on the builder, so under cross they must come from
-  # buildPackages: in a cross package set `pkgs.git` is a git compiled FOR
-  # Windows, and `pkgs.nim-2_2` is the mingw-HOSTED nim wrapper, which does not
-  # even evaluate (it wants a Windows bash).
+  # Dependencies that should only exist in the build environment.
   nativeBuildInputs = let
     # Fix for Nim compiler calling 'git rev-parse' and 'lsb_release'.
     fakeGit = writeScriptBin "git" "echo ${version}";
@@ -116,16 +83,12 @@ in stdenv.mkDerivation rec {
   ] ++ lib.optionals hostPlatform.isDarwin [
     darwin.cctools
   ] ++ lib.optionals isWindows [
-    # `buildPackages.nim-2_2` is the x86_64-w64-mingw32-nim wrapper: it runs on
-    # the builder, has os/cpu baked into its nim.cfg, and takes its backend from
-    # $CC at invocation time -- which the cross stdenv has already set to
-    # x86_64-w64-mingw32-gcc. Used together with USE_SYSTEM_NIM=1 below, because
-    # nimbus-build-system's own bootstrap would compile the Nim COMPILER with
-    # $CC and produce a PE that cannot run on the builder.
+    # Paired with USE_SYSTEM_NIM=1 below: nimbus-build-system would
+    # otherwise build the Nim compiler itself as a Windows binary.
     nim-2_2
     gnumake
-    # Only the Windows branch of nim-boringssl has hand-written asm, and it
-    # shells out to `nasm -f win64` from a compile-time macro.
+    # Only nim-boringssl's Windows branch has hand-written asm
+    # https://github.com/vacp2p/nim-boringssl/blob/c9505c71ecc67fd232d6ab23e5ae5810957e514f/prelude.nim#L321-L324
     nasm
   ];
 
@@ -141,9 +104,6 @@ in stdenv.mkDerivation rec {
     "QUICK_AND_DIRTY_NIMBLE=${if quickAndDirty then "1" else "0"}"
   ] ++ lib.optionals isWindows [
     "USE_SYSTEM_NIM=1"
-    # nim-libbacktrace vendors libbacktrace and builds it with a POSIX-shaped
-    # configure run; config.nims only reaches for it when this is on.
-    "USE_LIBBACKTRACE=0"
   ];
 
   postPatch = lib.optionalString isWindows ''
@@ -160,11 +120,7 @@ in stdenv.mkDerivation rec {
     # Force build of Nimble from dist/nimble source.
     export NIMBLE_COMMIT=""
     patchShebangs . vendor/nimbus-build-system > /dev/null
-    # Only the variables this target needs -- NOT $makeFlags, which carries the
-    # build TARGETS (`libstorage`). Passing those here would run the entire
-    # build inside configurePhase, i.e. before preBuild has staged the nat
-    # libraries, and the link would then fail on a missing libminiupnpc.a with
-    # nothing in the log to suggest an ordering problem.
+    # nixpkgs only passes makeFlags to its own make so USE_SYSTEM_NIM=1 is passed here.
     make nimbus-build-system-paths ${lib.optionalString isWindows "USE_SYSTEM_NIM=1"}
   '';
 
@@ -177,55 +133,22 @@ in stdenv.mkDerivation rec {
     chmod 777 -R dist/nimble csources_v3
     popd
   '' + lib.optionalString isWindows ''
-    # For --app:staticlib nim shells out to a BARE `ar`, and a cross stdenv has
-    # only x86_64-w64-mingw32-ar on PATH: the nixpkgs nim wrapper rewrites
-    # gcc.exe/gcc.linkerexe from $CC/$CXX but never the archiver, and nim
-    # exposes no config key for it. Every archive produced in this build is for
-    # the target, so shadowing ar with $AR is correct and not merely expedient.
+    # For --app:staticlib nim runs a hardcoded `ar` (extccomp.nim:86), with no
+    # config key to override it, and a cross stdenv only has $AR.
     mkdir -p $TMPDIR/arshim
     ln -sf "$(command -v $AR)" $TMPDIR/arshim/ar
     export PATH=$TMPDIR/arshim:$PATH
 
-    # nimbus-build-system's nat-libs targets branch on $(OS) -- the variable
-    # Windows' cmd.exe sets, which is empty on a Linux builder -- so a cross
-    # build silently takes their POSIX branch and produces archives that are
-    # wrong in three ways. Build them correctly here FIRST; the `make deps`
-    # inside the libstorage target then finds every object already newer than
-    # its sources and does nothing.
-    #
-    #   -fPIC is dropped: it is meaningless on PE (everything is relocatable)
-    #   and gcc warns on it.
-    #
-    #   -D*_STATICLIB is added: miniupnpc_declspec.h and natpmp_declspec.h both
-    #   resolve their LIBSPEC to __declspec(dllimport) on _WIN32 unless the
-    #   macro is defined. nim-nat-traversal defines them for the nim-GENERATED
-    #   C but not for the vendored library build, so each archive ends up
-    #   calling its own symbols through import stubs:
-    #   "undefined reference to `__imp_upnpDiscoverDevices'".
-    #
-    # Both vendored makefiles derive their target from `$(CC) -dumpmachine`
-    # rather than uname, so handing them the cross compiler is enough to select
-    # the MinGW branch. Note libnatpmp's MinGW branch then assigns
-    # CC = i686-w64-mingw32-gcc -- a command-line CC= overrides that, a
-    # CFLAGS-only invocation would not.
-    make -C vendor/nim-nat-traversal/vendor/miniupnp/miniupnpc \
-      CC="$CC" AR="$AR" RANLIB="$RANLIB" \
-      CFLAGS="-Os -DMINIUPNP_STATICLIB" build/libminiupnpc.a
+    # Put the Windows archive where nat_traversal/miniupnpc.nim:29 looks for it,
+    # at the miniupnpc root. nimbus-build-system detects Windows with $(OS),
+    # which reports the build machine os, not the target os.
+    make -C vendor/nim-nat-traversal/vendor/miniupnp/miniupnpc -f Makefile.mingw \
+      CC="$CC" AR="$AR" RANLIB="$RANLIB" libminiupnpc.a
 
     make -C vendor/nim-nat-traversal/vendor/libnatpmp-upstream \
       CC="$CC" AR="$AR" RANLIB="$RANLIB" \
       CFLAGS="-Wall -Os -DENABLE_STRNATPMPERR -DNATPMP_MAX_RETRIES=4 -DNATPMP_STATICLIB" \
       libnatpmp.a
-
-    # nim-nat-traversal expects libminiupnpc.a at the miniupnpc ROOT on Windows
-    # and under build/ everywhere else -- see the "the Makefiles of the miniupnp
-    # library have an inconsistency" comment in nat_traversal/miniupnpc.nim.
-    # That root layout is what Makefile.mingw produces, but Makefile.mingw
-    # generates miniupnpcstrings.h by building and RUNNING a .exe, which a Linux
-    # builder cannot do. So: build with the portable Makefile, then stage the
-    # archive where the Windows branch of the nim wrapper looks for it.
-    cp vendor/nim-nat-traversal/vendor/miniupnp/miniupnpc/build/libminiupnpc.a \
-       vendor/nim-nat-traversal/vendor/miniupnp/miniupnpc/libminiupnpc.a
   '';
 
   installPhase = ''
@@ -252,10 +175,6 @@ in stdenv.mkDerivation rec {
     description = "Logos Storage storage system";
     homepage = "https://github.com/logos-storage/logos-storage-nim";
     license = licenses.mit;
-    # stableSystems is the NATIVE set; the Windows target is a cross build and
-    # its pseudo-system key is not a platform nixpkgs knows about, so it is
-    # spelled out here. Omitting it is an evaluation-time hard failure, not a
-    # build one -- meta.platforms is checked long before anything compiles.
     platforms = stableSystems ++ platforms.windows;
   };
 }

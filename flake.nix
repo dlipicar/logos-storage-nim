@@ -2,26 +2,10 @@
   description = "Logos Storage build flake";
 
   inputs = {
-    # A commit from nixpkgs 25.11 release: https://github.com/NixOS/nixpkgs/tree/release-25.11
-    nixpkgs.url = "github:NixOS/nixpkgs/535f3e6942cb1cead3929c604320d3db54b542b9";
+    nixpkgs.url = "github:NixOS/nixpkgs?ref=release-25.11";
 
-    # WINDOWS TARGET ONLY -- a second nixpkgs, scoped to the cross package set
-    # so the native Linux and macOS outputs stay bit-identical.
-    #
-    # The rev is deliberately the SAME one logos-nix pins for its own Windows
-    # target (logos-nix/flake.nix `nixpkgs-windows`). libstorage.dll and the C++
-    # plugin that loads it end up in ONE directory, and both need
-    # libstdc++-6.dll / libgcc_s_seh-1.dll / libwinpthread-1.dll -- filenames,
-    # not store paths, once they are staged. Two nixpkgs revs would put two
-    # different builds of each in contention for the same name, with whichever
-    # is staged last silently winning for both. Matching the pin removes the
-    # question.
-    #
-    # Not a compiler requirement: the pin above (gcc 14.3) cross-builds this
-    # library just as well as logos-nix's (gcc 15.2) -- both were tried. The
-    # constraint is agreement with the consumer, not any one version. If
-    # logos-nix ever moves to this rev, drop this input entirely.
-    nixpkgs-windows.url = "github:NixOS/nixpkgs/b5aa0fbd538984f6e3d201be0005b4463d8b09f8";
+    # 25.11's mingw gcc is 14.3, logos-nix builds with 15.2.
+    nixpkgs-windows.url = "github:NixOS/nixpkgs?ref=release-26.05";
   };
 
   outputs = { self, nixpkgs, nixpkgs-windows }:
@@ -31,16 +15,6 @@
         "x86_64-darwin" "aarch64-darwin"
       ];
 
-      # x86_64-windows is a PSEUDO-SYSTEM. nixpkgs has no native Windows stdenv
-      # -- `import nixpkgs { system = "x86_64-windows"; }` dies in cc-wrapper
-      # ("called without required argument 'runtimeShell'") -- so this key means
-      # "cross-compiled to x86_64-w64-mingw32". The derivations under it carry
-      # system = x86_64-linux (a cross derivation's `system` is its BUILD
-      # platform), which is exactly why `nix build .#packages.x86_64-windows.…`
-      # runs on an ordinary Linux builder.
-      #
-      # The spelling is load-bearing: consumers reach these outputs by plain
-      # string interpolation, `logos-storage.packages.${system}.libstorage`.
       windowsSystem = "x86_64-windows";
       windowsBuildSystem = "x86_64-linux";
 
@@ -57,15 +31,36 @@
             localSystem = windowsBuildSystem;
             crossSystem = {
               config = "x86_64-w64-mingw32";
-              # UCRT, not the legacy MSVCRT. This is not a style choice:
-              # library/libstorage.nim allocates the strings it hands out with
-              # <stdlib.h> malloc (see storage_version), and the C++ consumer
-              # calls free() on them. msvcrt and ucrt keep SEPARATE heaps, so a
-              # mismatch across that boundary is heap corruption, not a warning.
-              # Everything downstream (logos-nix, and therefore every Qt module)
-              # is ucrt, so libstorage must be too.
+              # libstorage mallocs the strings the consumer frees, so we need
+              # ucrt, Universal C Runtime, and not mingw's msvcrt default,
+              # to be compatible with logos-storage-module.
               libc = "ucrt";
             };
+            overlays = [
+              # nixpkgs 26.05 ships Nim 2.2.4, the project pins 2.2.10.
+              # We prefer override the Nim version and keep the release branch
+              # for nixpkgs-windows.url rather than pinning to a specific commit on
+              # unstable branch and have the Nim version up to date.
+              (final: prev: {
+                nim-unwrapped-2_2 = prev.nim-unwrapped-2_2.overrideAttrs (old: rec {
+                  version = "2.2.10";
+                  src = prev.fetchurl {
+                    url = "https://nim-lang.org/download/nim-${version}.tar.xz";
+                    hash = "sha256-eVe37QBCBrzxC8xPO0dEFTh45i8kMVUqmo6dP0Do1dU=";
+                  };
+                  # ROT13s the module names nim generates, so nix cannot read
+                  # store paths in them and record runtime dependencies on the
+                  # build tools. Rewritten upstream for 2.2.10, and our output
+                  # is a Windows PE that leaves the store anyway.
+                  patches = builtins.filter
+                    (p: baseNameOf (toString p) != "extra-mangling-2.patch") old.patches;
+                  # This flag turns on code that 2.2.10 no longer compiles.
+                  # nixpkgs dropped it in the same commit that moved to 2.2.10.
+                  kochArgs = builtins.filter
+                    (f: f != "-d:nativeStacktrace") old.kochArgs;
+                });
+              })
+            ];
           };
     in rec {
       packages = forAllSystems (system: let
