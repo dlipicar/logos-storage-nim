@@ -157,8 +157,11 @@ in stdenv.mkDerivation rec {
       cp build/storage${lib.optionalString isWindows ".exe"} $out/bin/
     else
       mkdir -p $out/lib $out/include${lib.optionalString isWindows " $out/bin"}
-      cp build/libstorage.${libExt} $out/${dllDir}/ 2>/dev/null || true
-      cp build/libstorage.a         $out/lib/       2>/dev/null || true
+      if [ -f build/libstorage.${libExt} ]; then
+        cp build/libstorage.${libExt} $out/${dllDir}/
+      else
+        cp build/libstorage.a $out/lib/
+      fi
   '' + lib.optionalString isWindows ''
       # Fail loudly rather than shipping a lib/ that a consumer cannot link.
       if [ ! -f build/libstorage.dll.a ]; then

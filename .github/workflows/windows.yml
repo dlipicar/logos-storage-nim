@@ -9,10 +9,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   windows:
-    uses: logos-co/logos-windows-ci/.github/workflows/windows-ci.yml@v1
+    uses: logos-co/logos-windows-ci/.github/workflows/windows-ci.yml@f60eef58524c2034d923a1b1d7749f91ce40236b
     secrets: inherit
     with:
+      submodules: true
       targets: libstorage logos-storage-nim
       smoke-file: .github/smoke/storage-cross.sh

@@ -6,13 +6,13 @@ set -euo pipefail
 STORAGE="${STORAGE:-logos-storage-nim/bin/storage.exe}"
 LIBDIR="${LIBDIR:-libstorage}"
 
-run "$STORAGE" --version | tee version.txt
-grep -q "Storage version:"  version.txt
-grep -q "Storage revision:" version.txt
+version=$(run "$STORAGE" --version); echo "$version"
+grep -q "Storage version:"  <<<"$version" || { echo "::error::version banner missing"; exit 1; }
+grep -q "Storage revision:" <<<"$version" || { echo "::error::revision banner missing"; exit 1; }
 
 # Ensure NAT options are available via --help
-run "$STORAGE" --help | tee help.txt
-grep -q -- "--nat-port-mapping-timeout" help.txt
+help=$(run "$STORAGE" --help); echo "$help"
+grep -q -- "--nat-port-mapping-timeout" <<<"$help" || { echo "::error::NAT options missing from --help"; exit 1; }
 
 # Ensure the DLL and header are built
 test -f "$LIBDIR/bin/libstorage.dll"   || { echo "::error::libstorage.dll missing"; exit 1; }
