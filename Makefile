@@ -72,7 +72,6 @@ export CXXFLAGS
 	clean \
 	coverage \
 	deps \
-	libbacktrace \
 	test \
 	testAll \
 	testIntegration \
@@ -121,9 +120,6 @@ NIM_PARAMS := $(NIM_PARAMS) -d:release
 endif
 
 deps: | deps-common nat-libs
-ifneq ($(USE_LIBBACKTRACE), 0)
-deps: | libbacktrace
-endif
 
 update: | update-common
 
@@ -196,20 +192,6 @@ testAll: | build deps
 		$(ENV_SCRIPT) nim testAll $(NIM_PARAMS) build.nims
 	$(MAKE) $(if $(ncpu),-j$(ncpu),) testLibstorage
 
-# nim-libbacktrace
-LIBBACKTRACE_MAKE_FLAGS := -C vendor/nim-libbacktrace --no-print-directory BUILD_CXX_LIB=0
-libbacktrace:
-ifeq ($(detected_OS), Windows)
-# MSYS2 detection
-ifneq ($(MSYSTEM),)
-	+ $(MAKE) $(LIBBACKTRACE_MAKE_FLAGS) CMAKE_ARGS="-G'MSYS Makefiles'"
-else
-	+ $(MAKE) $(LIBBACKTRACE_MAKE_FLAGS)
-endif
-else
-	+ $(MAKE) $(LIBBACKTRACE_MAKE_FLAGS)
-endif
-
 coverage:
 	$(MAKE) NIMFLAGS="$(NIMFLAGS) --lineDir:on --passC:-fprofile-arcs --passC:-ftest-coverage --passL:-fprofile-arcs --passL:-ftest-coverage" test
 	cd nimcache/release/testStorage && rm -f *.c
@@ -231,9 +213,6 @@ coverage-script: build deps
 # usual cleaning
 clean: | clean-common
 	rm -rf build
-ifneq ($(USE_LIBBACKTRACE), 0)
-	+ $(MAKE) -C vendor/nim-libbacktrace clean $(HANDLE_OUTPUT)
-endif
 
 ############
 ## Format ##
