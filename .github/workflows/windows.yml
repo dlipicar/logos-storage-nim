@@ -19,5 +19,6 @@ jobs:
     secrets: inherit
     with:
       submodules: recursive
+      timeout-minutes: 120
       targets: libstorage logos-storage-nim
       smoke-file: .github/smoke/storage-cross.sh
